@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>گیرنده فایل - انتقال فایل شبکه محلی</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="qrcode.min.js"></script>
+</head>
+<body class="dark-mode">
+    <div class="container">
+        <header>
+            <h1>سیستم دریافت فایل</h1>
+            <div class="theme-toggle" onclick="toggleTheme()">تغییر تم</div>
+        </header>
+
+        <main>
+            <section class="connection-info">
+                <h2>اطلاعات اتصال</h2>
+                <div class="info-box">
+                    <label>آدرس IP دستگاه شما:</label>
+                    <div id="local-ip" class="highlight">در حال تشخیص...</div>
+                </div>
+                <div class="info-box">
+                    <label>لینک دسترسی برای فرستنده:</label>
+                    <div id="sender-link" class="highlight">در حال بارگذاری...</div>
+                </div>
+                <div class="qr-container">
+                    <div id="qrcode"></div>
+                    <p>با اسکن این QR Code از طریق دستگاه فرستنده به سیستم متصل شوید</p>
+                </div>
+                <div class="info-box">
+                    <label>وضعیت اتصال:</label>
+                    <div id="connection-status" class="status-disconnected">قطع</div>
+                </div>
+            </section>
+
+            <section class="received-files">
+                <h2>فایل‌های دریافت شده</h2>
+                <div id="file-list" class="file-list">
+                    <div class="empty-state">هنوز فایلی دریافت نشده است</div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>سیستم انتقال فایل شبکه محلی - نسخه 1.0</p>
+        </footer>
+    </div>
+
+    <script>
+        // تشخیص آدرس IP محلی و تولید QR Code
+        document.addEventListener('DOMContentLoaded', function() {
+            detectLocalIp();
+            setupWebSocket();
+        });
+
+        // تابع برای تشخیص آدرس IP محلی
+        async function detectLocalIp() {
+            try {
+                const response = await fetch('/ip');
+                const data = await response.json();
+                const ip = data.ip || 'localhost';
+                
+                document.getElementById('local-ip').textContent = ip;
+                
+                const senderUrl = `http://${ip}:${window.location.port || 3000}/sender.html`;
+                document.getElementById('sender-link').textContent = senderUrl;
+                
+                // تولید QR Code
+                new QRCode(document.getElementById('qrcode'), {
+                    text: senderUrl,
+                    width: 200,
+                    height: 200,
+                    colorDark: "#000000",
+                    colorLight: "#ffffff",
+                    correctLevel: QRCode.CorrectLevel.H
+                });
+            } catch (error) {
+                console.error('Error detecting local IP:', error);
+                document.getElementById('local-ip').textContent = 'خطا در تشخیص آدرس IP';
+            }
+        }
+
+        // تابع برای تنظیم اتصال WebSocket
+        function setupWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.host;
+            const ws = new WebSocket(`${protocol}//${host}`);
+            
+            ws.onopen = () => {
+                console.log('Connected to WebSocket server');
+                updateConnectionStatus(true);
+            };
+            
+            ws.onclose = () => {
+                console.log('Disconnected from WebSocket server');
+                updateConnectionStatus(false);
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                updateConnectionStatus(false);
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'new_files') {
+                    displayReceivedFiles(data.files);
+                }
+            };
+        }
+
+        // تابع برای به‌روزرسانی وضعیت اتصال
+        function updateConnectionStatus(connected) {
+            const statusElement = document.getElementById('connection-status');
+            statusElement.textContent = connected ? 'متصل' : 'قطع';
+            statusElement.className = connected ? 'status-connected' : 'status-disconnected';
+        }
+
+        // تابع برای نمایش فایل‌های دریافت شده
+        function displayReceivedFiles(files) {
+            const fileListElement = document.getElementById('file-list');
+            
+            if (files.length === 0) {
+                fileListElement.innerHTML = '<div class="empty-state">هنوز فایلی دریافت نشده است</div>';
+                return;
+            }
+            
+            fileListElement.innerHTML = files.map(file => `
+                <div class="file-item">
+                    <div class="file-icon">${getFileIcon(file.type)}</div>
+                    <div class="file-info">
+                        <div class="file-name">${file.name}</div>
+                        <div class="file-meta">
+                            <span>${formatFileSize(file.size)}</span>
+                            <span>${file.type}</span>
+                        </div>
+                    </div>
+                    <a href="${file.url}" download class="download-btn">دانلود</a>
+                </div>
+            `).join('');
+        }
+
+        // تابع کمکی برای دریافت آیکون فایل بر اساس نوع
+        function getFileIcon(fileType) {
+            const type = fileType.split('/')[0];
+            const icons = {
+                'image': '📷',
+                'video': '🎬',
+                'audio': '🎵',
+                'application': '📄',
+                'text': '📝',
+                'default': '📁'
+            };
+            return icons[type] || icons['default'];
+        }
+
+        // تابع کمکی برای فرمت کردن حجم فایل
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 بایت';
+            const k = 1024;
+            const sizes = ['بایت', 'کیلوبایت', 'مگابایت', 'گیگابایت'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i];
+        }
+
+        // تابع برای تغییر تم
+        function toggleTheme() {
+            document.body.classList.toggle('dark-mode');
+            document.body.classList.toggle('light-mode');
+        }
+    </script>
+</body>
+</html>

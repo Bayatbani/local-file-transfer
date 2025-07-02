@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>فرستنده فایل - انتقال فایل شبکه محلی</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="dark-mode">
+    <div class="container">
+        <header>
+            <h1>سیستم ارسال فایل</h1>
+            <div class="theme-toggle" onclick="toggleTheme()">تغییر تم</div>
+        </header>
+
+        <main>
+            <section class="file-upload">
+                <h2>ارسال فایل جدید</h2>
+                <div id="drop-area" class="drop-area">
+                    <div class="drop-content">
+                        <input type="file" id="file-input" multiple style="display: none;">
+                        <button onclick="document.getElementById('file-input').click()" class="select-btn">انتخاب فایل</button>
+                        <p>یا فایل‌ها را اینجا رها کنید</p>
+                    </div>
+                </div>
+                <div id="file-preview" class="file-preview"></div>
+                <div class="upload-actions">
+                    <button id="upload-btn" class="upload-btn" disabled>آپلود فایل‌ها</button>
+                    <button id="cancel-btn" class="cancel-btn" disabled>لغو</button>
+                </div>
+                <div id="progress-container" class="progress-container" style="display: none;">
+                    <div class="progress-info">
+                        <span id="progress-status">در حال آپلود...</span>
+                        <span id="progress-percent">0%</span>
+                    </div>
+                    <progress id="upload-progress" value="0" max="100"></progress>
+                    <div class="speed-info">
+                        <span id="speed">سرعت: محاسبه...</span>
+                        <span id="remaining">زمان باقی‌مانده: محاسبه...</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="transfer-history">
+                <h2>تاریخچه انتقال</h2>
+                <div id="history-list" class="history-list">
+                    <div class="empty-state">هنوز فایلی ارسال نشده است</div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>سیستم انتقال فایل شبکه محلی - نسخه 1.0</p>
+        </footer>
+    </div>
+
+    <script>
+        // متغیرهای全局
+        let selectedFiles = [];
+        let uploadInProgress = false;
+        let uploadStartTime;
+        let xhr;
+
+        // رویدادهای صفحه
+        document.addEventListener('DOMContentLoaded', function() {
+            setupDragAndDrop();
+            setupFileInput();
+            setupUploadButton();
+            setupCancelButton();
+            loadTransferHistory();
+        });
+
+        // تنظیمات Drag and Drop
+        function setupDragAndDrop() {
+            const dropArea = document.getElementById('drop-area');
+            
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropArea.addEventListener(eventName, preventDefaults, false);
+            });
+            
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropArea.addEventListener(eventName, highlight, false);
+            });
+            
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropArea.addEventListener(eventName, unhighlight, false);
+            });
+            
+            dropArea.addEventListener('drop', handleDrop, false);
+        }
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        function highlight() {
+            document.getElementById('drop-area').classList.add('highlight');
+        }
+
+        function unhighlight() {
+            document.getElementById('drop-area').classList.remove('highlight');
+        }
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            handleFiles(files);
+        }
+
+        // تنظیمات فایل اینپوت
+        function setupFileInput() {
+            const fileInput = document.getElementById('file-input');
+            fileInput.addEventListener('change', function() {
+                handleFiles(this.files);
+            });
+        }
+
+        // پردازش فایل‌های انتخاب شده
+        function handleFiles(files) {
+            if (uploadInProgress) return;
+            
+            selectedFiles = Array.from(files);
+            updateFilePreview();
+            updateUploadButton();
+        }
+
+        // به‌روزرسانی پیش‌نمایش فایل‌ها
+        function updateFilePreview() {
+            const filePreview = document.getElementById('file-preview');
+            
+            if (selectedFiles.length === 0) {
+                filePreview.innerHTML = '';
+                return;
+            }
+            
+            filePreview.innerHTML = selectedFiles.map(file => `
+                <div class="file-preview-item">
+                    <div class="file-icon">${getFileIcon(file.type)}</div>
+                    <div class="file-info">
+                        <div class="file-name">${file.name}</div>
+                        <div class="file-meta">
+                            <span>${formatFileSize(file.size)}</span>
+                            <span>${file.type || 'ناشناخته'}</span>
+                        </div>
+                    </div>
+                    <button class="remove-btn" onclick="removeFile('${file.name}')">×</button>
+                </div>
+            `).join('');
+        }
+
+        // حذف فایل از لیست
+        function removeFile(fileName) {
+            if (uploadInProgress) return;
+            
+            selectedFiles = selectedFiles.filter(file => file.name !== fileName);
+            updateFilePreview();
+            updateUploadButton();
+        }
+
+        // به‌روزرسانی وضعیت دکمه آپلود
+        function updateUploadButton() {
+            const uploadBtn = document.getElementById('upload-btn');
+            uploadBtn.disabled = selectedFiles.length === 0;
+        }
+
+        // تنظیمات دکمه آپلود
+        function setupUploadButton() {
+            const uploadBtn = document.getElementById('upload-btn');
+            uploadBtn.addEventListener('click', startUpload);
+        }
+
+        // شروع آپلود فایل‌ها
+        function startUpload() {
+            if (selectedFiles.length === 0 || uploadInProgress) return;
+            
+            uploadInProgress = true;
+            uploadStartTime = new Date().getTime();
+            
+            // نمایش پیشرفت آپلود
+            const progressContainer = document.getElementById('progress-container');
+            progressContainer.style.display = 'block';
+            
+            const progressBar = document.getElementById('upload-progress');
+            const progressPercent = document.getElementById('progress-percent');
+            const progressStatus = document.getElementById('progress-status');
+            const speedElement = document.getElementById('speed');
+            const remainingElement = document.getElementById('remaining');
+            
+            progressBar.value = 0;
+            progressPercent.textContent = '0%';
+            progressStatus.textContent = 'در حال آپلود...';
+            
+            // آماده‌سازی FormData
+            const formData = new FormData();
+            selectedFiles.forEach(file => {
+                formData.append('files', file);
+            });
+            
+            // ارسال فایل‌ها با XMLHttpRequest
+            xhr = new XMLHttpRequest();
+            xhr.open('POST', '/upload', true);
+            
+            xhr.upload.onprogress = function(e) {
+                if (e.lengthComputable) {
+                    const percent = Math.round((e.loaded / e.total) * 100);
+                    progressBar.value = percent;
+                    progressPercent.textContent = `${percent}%`;
+                    
+                    // محاسبه سرعت و زمان باقی‌مانده
+                    const elapsedTime = (new Date().getTime() - uploadStartTime) / 1000; // به ثانیه
+                    const speed = e.loaded / elapsedTime; // بایت بر ثانیه
+                    const remainingBytes = e.total - e.loaded;
+                    const remainingTime = remainingBytes / speed;
+                    
+                    speedElement.textContent = `سرعت: ${formatSpeed(speed)}`;
+                    remainingElement.textContent = `زمان باقی‌مانده: ${formatTime(remainingTime)}`;
+                }
+            };
+            
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    const response = JSON.parse(xhr.responseText);
+                    progressStatus.textContent = 'آپلود با موفقیت انجام شد!';
+                    addToHistory(response.files);
+                    resetUpload();
+                } else {
+                    progressStatus.textContent = 'خطا در آپلود فایل‌ها';
+                    resetUpload();
+                }
+            };
+            
+            xhr.onerror = function() {
+                progressStatus.textContent = 'خطا در اتصال به سرور';
+                resetUpload();
+            };
+            
+            xhr.send(formData);
+            
+            // غیرفعال کردن دکمه‌ها در حین آپلود
+            document.getElementById('upload-btn').disabled = true;
+            document.getElementById('cancel-btn').disabled = false;
+        }
+
+        // تنظیمات دکمه لغو
+        function setupCancelButton() {
+            const cancelBtn = document.getElementById('cancel-btn');
+            cancelBtn.addEventListener('click', cancelUpload);
+        }
+
+        // لغو آپلود
+        function cancelUpload() {
+            if (!uploadInProgress || !xhr) return;
+            
+            xhr.abort();
+            resetUpload();
+            document.getElementById('progress-status').textContent = 'آپلود لغو شد';
+        }
+
+        // بازنشانی وضعیت آپلود
+        function resetUpload() {
+            uploadInProgress = false;
+            selectedFiles = [];
+            updateFilePreview();
+            updateUploadButton();
+            
+            document.getElementById('cancel-btn').disabled = true;
+            setTimeout(() => {
+                document.getElementById('progress-container').style.display = 'none';
+            }, 3000);
+        }
+
+        // افزودن به تاریخچه انتقال
+        function addToHistory(files) {
+            const history = JSON.parse(localStorage.getItem('transferHistory') || [];
+            const newEntries = files.map(file => ({
+                name: file.name,
+                size: file.size,
+                type: file.type,
+                date: new Date().toLocaleString('fa-IR'),
+                url: file.url
+            }));
+            
+            const updatedHistory = [...newEntries, ...history].slice(0, 50); // محدودیت 50 مورد
+            localStorage.setItem('transferHistory', JSON.stringify(updatedHistory));
+            loadTransferHistory();
+        }
+
+        // بارگذاری تاریخچه انتقال
+        function loadTransferHistory() {
+            const history = JSON.parse(localStorage.getItem('transferHistory')) || [];
+            const historyList = document.getElementById('history-list');
+            
+            if (history.length === 0) {
+                historyList.innerHTML = '<div class="empty-state">هنوز فایلی ارسال نشده است</div>';
+                return;
+            }
+            
+            historyList.innerHTML = history.map(item => `
+                <div class="history-item">
+                    <div class="file-icon">${getFileIcon(item.type)}</div>
+                    <div class="file-info">
+                        <div class="file-name">${item.name}</div>
+                        <div class="file-meta">
+                            <span>${formatFileSize(item.size)}</span>
+                            <span>${item.type}</span>
+                            <span>${item.date}</span>
+                        </div>
+                    </div>
+                    <a href="${item.url}" download class="download-btn">دانلود</a>
+                </div>
+            `).join('');
+        }
+
+        // تابع کمکی برای دریافت آیکون فایل بر اساس نوع
+        function getFileIcon(fileType) {
+            const type = (fileType || '').split('/')[0];
+            const icons = {
+                'image': '📷',
+                'video': '🎬',
+                'audio': '🎵',
+                'application': '📄',
+                'text': '📝',
+                'default': '📁'
+            };
+            return icons[type] || icons['default'];
+        }
+
+        // تابع کمکی برای فرمت کردن حجم فایل
+        function formatFileSize(bytes) {
+            if (!bytes) return '0 بایت';
+            const k = 1024;
+            const sizes = ['بایت', 'کیلوبایت', 'مگابایت', 'گیگابایت'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // تابع کمکی برای فرمت کردن سرعت
+        function formatSpeed(bytesPerSecond) {
+            const k = 1024;
+            const speeds = ['بایت/ثانیه', 'کیلوبایت/ثانیه', 'مگابایت/ثانیه'];
+            const i = Math.floor(Math.log(bytesPerSecond) / Math.log(k));
+            return parseFloat((bytesPerSecond / Math.pow(k, i)).toFixed(2)) + ' ' + speeds[i];
+        }
+
+        // تابع کمکی برای فرمت کردن زمان
+        function formatTime(seconds) {
+            if (seconds < 60) return `${Math.round(seconds)} ثانیه`;
+            if (seconds < 3600) return `${Math.round(seconds / 60)} دقیقه`;
+            return `${Math.round(seconds / 3600)} ساعت`;
+        }
+
+        // تابع برای تغییر تم
+        function toggleTheme() {
+            document.body.classList.toggle('dark-mode');
+            document.body.classList.toggle('light-mode');
+        }
+    </script>
+</body>
+</html>
